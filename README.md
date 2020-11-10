@@ -38,6 +38,8 @@ To train V2 or V3 Generator, replace `config_v1.json` with `config_v2.json` or `
 Checkpoints and copy of the configuration file are saved in `cp_hifigan` directory by default.<br>
 You can change the path by adding `--checkpoint_path` option.
 
+Validation loss during training with V1 generator.<br>
+![validation loss](./validation_loss.png)
 
 ## Pretrained Model
 You can also use pretrained models we provide.<br/>
@@ -58,12 +60,28 @@ Details of each folder are as in follows:
 |UNIVERSAL_V1|V1|Universal|No|
 
 
+## Fine-Tuning
+1. Generate mel-spectrograms in numpy format using [Tacotron2](https://github.com/NVIDIA/tacotron2) with teacher-forcing.<br/>
+The file name of the generated mel-spectrogram should match the audio file and the extension should be `.npy`.<br/>
+Example:
+    ```
+    Audio File : LJ001-0001.wav
+    Mel-Spectrogram File : LJ001-0001.npy
+    ```
+2. Create `ft_dataset` folder and copy the generated mel-spectrogram files into it.<br/>
+3. Run the following command.
+    ```
+    python train.py --fine_tuning True --config config_v1.json
+    ```
+    For other command line options, please refer to the training section.
+
+
 ## Inference from wav file
 1. Make `test_files` directory and copy wav files into the directory.
 2. Run the following command.
-```
-python inference.py --checkpoint_file [generator checkpoint file path]
-```
+    ```
+    python inference.py --checkpoint_file [generator checkpoint file path]
+    ```
 Generated wav files are saved in `generated_files` by default.<br>
 You can change the path by adding `--output_dir` option.
 
@@ -73,9 +91,9 @@ You can change the path by adding `--output_dir` option.
 You can generate mel-spectrograms using [Tacotron2](https://github.com/NVIDIA/tacotron2), 
 [Glow-TTS](https://github.com/jaywalnut310/glow-tts) and so forth.
 2. Run the following command.
-```
-python inference_e2e.py --checkpoint_file [generator checkpoint file path]
-```
+    ```
+    python inference_e2e.py --checkpoint_file [generator checkpoint file path]
+    ```
 Generated wav files are saved in `generated_files_from_mel` by default.<br>
 You can change the path by adding `--output_dir` option.
 
