@@ -7,7 +7,6 @@ from utils import init_weights, get_padding
 
 LRELU_SLOPE = 0.1
 
-
 class ResBlock1(torch.nn.Module):
     def __init__(self, h, channels, kernel_size=3, dilation=(1, 3, 5)):
         super(ResBlock1, self).__init__()
@@ -281,3 +280,111 @@ def generator_loss(disc_outputs):
 
     return loss, gen_losses
 
+# Chomp1d - from https://github.com/locuslab/TCN/
+# Chops off the end of a conv output, apply after conv1d with half kernel size to make the conv1d causal
+class Chomp1d(nn.Module):
+    def __init__(self, chomp_size):
+        super(Chomp1d, self).__init__()
+        self.chomp_size = chomp_size
+
+    def forward(self, x):
+        return x[:, :, :-self.chomp_size].contiguous()
+
+# Causal conv1d by padding and chopping 
+class CausalConv1d(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, dilation, right_context = 0):
+        super(CausalConv1d, self).__init__()
+        self.conv = weight_norm(torch.nn.Conv1d(in_channels, out_channels, kernel_size, padding=(kernel_size - 1 + right_context) * dilation, dilation=dilation))
+        self.chomp = Chomp1d((kernel_size - 1) * dilation)
+        
+    def remove_weight_norm(self):
+        remove_weight_norm(self.conv)
+    
+    def forward(self, x):
+        return self.chomp(self.conv(x))
+
+# Causal conv1dtranspose by padding and chopping 
+class CausalConvTranspose1d(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride, out_d):
+        super(CausalConvTranspose1d, self).__init__()
+        self.conv = weight_norm(torch.nn.ConvTranspose1d(in_channels, out_channels, kernel_size, stride=stride))
+        self.chomp = Chomp1d(kernel_size - stride)
+        
+    def remove_weight_norm(self):
+        remove_weight_norm(self.conv)
+    
+    def forward(self, x):
+        return self.chomp(self.conv(x))
+
+class CausalResBlock2(torch.nn.Module):
+    def __init__(self, h, channels, kernel_size=3, dilation=(1, 3)):
+        super(CausalResBlock2, self).__init__()
+        self.h = h
+        self.convs = nn.ModuleList([
+            CausalConv1d(channels, channels, kernel_size, dilation=dilation[0]),
+            CausalConv1d(channels, channels, kernel_size, dilation=dilation[1])
+        ])
+        for conv in self.convs:
+            conv.conv.apply(init_weights)
+
+    def forward(self, x):
+        for c in self.convs:
+            xt = F.leaky_relu(x, LRELU_SLOPE)
+            xt = c(xt)
+            x = xt + x
+        return x
+
+    def remove_weight_norm(self):
+        for l in self.convs:
+            l.remove_weight_norm()
+            
+class CausalGenerator(torch.nn.Module):
+    def __init__(self, h):
+        super(CausalGenerator, self).__init__()
+        self.h = h
+        self.num_kernels = len(h.resblock_kernel_sizes)
+        self.num_upsamples = len(h.upsample_rates)
+        self.conv_pre = CausalConv1d(80, h.upsample_initial_channel, 7, 1, right_context = h.context_frames)
+        resblock = CausalResBlock2
+
+        upsample_d = 15
+        self.ups = nn.ModuleList()
+        for i, (u, k) in enumerate(zip(h.upsample_rates, h.upsample_kernel_sizes)):
+            upsample_d *= u
+            self.ups.append(CausalConvTranspose1d(h.upsample_initial_channel//(2**i), h.upsample_initial_channel//(2**(i+1)), k, u, upsample_d))
+
+        self.resblocks = nn.ModuleList()
+        for i in range(len(self.ups)):
+            ch = h.upsample_initial_channel//(2**(i+1))
+            for j, (k, d) in enumerate(zip(h.resblock_kernel_sizes, h.resblock_dilation_sizes)):
+                self.resblocks.append(resblock(h, ch, k, d))
+
+        self.conv_post = CausalConv1d(ch, 1, 7, 1)
+        self.conv_post.conv.apply(init_weights)
+
+    def forward(self, x):
+        x = self.conv_pre(x)
+        for i in range(self.num_upsamples):
+            x = F.leaky_relu(x, LRELU_SLOPE)
+            x = self.ups[i](x)
+            xs = None
+            for j in range(self.num_kernels):
+                if xs is None:
+                    xs = self.resblocks[i*self.num_kernels+j](x)
+                else:
+                    xs += self.resblocks[i*self.num_kernels+j](x)
+            x = xs / self.num_kernels
+        x = F.leaky_relu(x)
+        x = self.conv_post(x)
+        x = torch.tanh(x)
+
+        return x
+
+    def remove_weight_norm(self):
+        print('Removing weight norm...')
+        for l in self.ups:
+            l.remove_weight_norm()
+        for l in self.resblocks:
+            l.remove_weight_norm()
+        self.conv_pre.remove_weight_norm()
+        self.conv_post.remove_weight_norm()
