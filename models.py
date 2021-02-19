@@ -283,19 +283,20 @@ def generator_loss(disc_outputs):
 # Chomp1d - from https://github.com/locuslab/TCN/
 # Chops off the end of a conv output, apply after conv1d with half kernel size to make the conv1d causal
 class Chomp1d(nn.Module):
-    def __init__(self, chomp_size):
+    def __init__(self, chomp_size, chomp_size_left = 0):
         super(Chomp1d, self).__init__()
         self.chomp_size = chomp_size
-
+        self.chomp_size_left = chomp_size_left
+        
     def forward(self, x):
-        return x[:, :, :-self.chomp_size].contiguous()
+        return x[:, :, self.chomp_size_left:-self.chomp_size].contiguous()
 
 # Causal conv1d by padding and chopping 
 class CausalConv1d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, dilation, right_context = 0):
         super(CausalConv1d, self).__init__()
         self.conv = weight_norm(torch.nn.Conv1d(in_channels, out_channels, kernel_size, padding=(kernel_size - 1 + right_context) * dilation, dilation=dilation))
-        self.chomp = Chomp1d((kernel_size - 1) * dilation)
+        self.chomp = Chomp1d((kernel_size - 1) * dilation, 2 * right_context * dilation)
         
     def remove_weight_norm(self):
         remove_weight_norm(self.conv)
