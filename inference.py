@@ -9,6 +9,7 @@ from scipy.io.wavfile import write
 from env import AttrDict
 from meldataset import mel_spectrogram, MAX_WAV_VALUE, load_wav
 from models import Generator
+from pqmf import PQMF
 
 h = None
 device = None
@@ -43,7 +44,7 @@ def inference(a):
     filelist = os.listdir(a.input_wavs_dir)
 
     os.makedirs(a.output_dir, exist_ok=True)
-
+    pqmf = PQMF(N=4, taps=62, cutoff=0.15, beta=9.0).cuda()
     generator.eval()
     generator.remove_weight_norm()
     with torch.no_grad():
@@ -53,6 +54,9 @@ def inference(a):
             wav = torch.FloatTensor(wav).to(device)
             x = get_mel(wav.unsqueeze(0))
             y_g_hat = generator(x)
+            if h.output_channel > 1:
+                y_mb_ = y_g_hat
+                y_g_hat = pqmf.synthesis(y_mb_)
             audio = y_g_hat.squeeze()
             audio = audio * MAX_WAV_VALUE
             audio = audio.cpu().numpy().astype('int16')
